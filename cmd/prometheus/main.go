@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/grafana/walqueue/types"
 	"log/slog"
 	"math"
 	"math/bits"
@@ -55,6 +56,8 @@ import (
 	"k8s.io/klog"
 	klogv2 "k8s.io/klog/v2"
 
+	"github.com/go-kit/log"
+	wq "github.com/grafana/walqueue/implementations/prometheus"
 	"github.com/prometheus/prometheus/config"
 	"github.com/prometheus/prometheus/discovery"
 	"github.com/prometheus/prometheus/model/exemplar"
@@ -727,6 +730,8 @@ func main() {
 		fanoutStorage = storage.NewFanout(logger, localStorage, remoteStorage)
 	)
 
+	useWalQueue := true
+
 	var (
 		ctxWeb, cancelWeb = context.WithCancel(context.Background())
 		ctxRule           = context.Background()
@@ -768,16 +773,54 @@ func main() {
 		os.Exit(1)
 	}
 
-	scrapeManager, err := scrape.NewManager(
-		&cfg.scrape,
-		logger.With("component", "scrape manager"),
-		logging.NewJSONFileLogger,
-		fanoutStorage,
-		prometheus.DefaultRegisterer,
-	)
-	if err != nil {
-		logger.Error("failed to create a scrape manager", "err", err)
-		os.Exit(1)
+	var scrapeManager *scrape.Manager
+	if useWalQueue {
+		queue, err := wq.NewQueue("agent", types.ConnectionConfig{
+			URL:        os.Getenv("URL"),
+			BatchCount: 1000,
+			BasicAuth: &types.BasicAuth{
+				Username: os.Getenv("USER"),
+				Password: os.Getenv("PASS"),
+			},
+			FlushInterval: 1 * time.Second,
+			Parallelism: types.ParallelismConfig{
+				AllowedDrift:                45 * time.Second,
+				MinimumScaleDownDrift:       30 * time.Second,
+				MaxConnections:              100,
+				MinConnections:              1,
+				ResetInterval:               1 * time.Minute,
+				Lookback:                    1 * time.Minute,
+				CheckInterval:               1 * time.Second,
+				AllowedNetworkErrorFraction: 0.9,
+			},
+		}, cfg.agentStoragePath, 10_000, 1*time.Second, 1*time.Hour, prometheus.DefaultRegisterer, "prometheus_agent", log.NewNopLogger())
+		if err != nil {
+			logger.Error("failed to create a wal queue", "err", err)
+			os.Exit(1)
+		}
+		scrapeManager, err = scrape.NewManager(
+			&cfg.scrape,
+			logger.With("component", "scrape manager"),
+			logging.NewJSONFileLogger,
+			queue,
+			prometheus.DefaultRegisterer,
+		)
+		if err != nil {
+			logger.Error("failed to create a scrape manager", "err", err)
+			os.Exit(1)
+		}
+	} else {
+		scrapeManager, err = scrape.NewManager(
+			&cfg.scrape,
+			logger.With("component", "scrape manager"),
+			logging.NewJSONFileLogger,
+			fanoutStorage,
+			prometheus.DefaultRegisterer,
+		)
+		if err != nil {
+			logger.Error("failed to create a scrape manager", "err", err)
+			os.Exit(1)
+		}
 	}
 
 	var (
@@ -1301,7 +1344,6 @@ func main() {
 	}
 	if agentMode {
 		// WAL storage.
-		opts := cfg.agent.ToAgentOptions(cfg.tsdb.OutOfOrderTimeWindow)
 		cancel := make(chan struct{})
 		g.Add(
 			func() error {
@@ -1310,16 +1352,6 @@ func main() {
 					if cfg.agent.WALSegmentSize < 10*1024*1024 || cfg.agent.WALSegmentSize > 256*1024*1024 {
 						return errors.New("flag 'storage.agent.wal-segment-size' must be set between 10MB and 256MB")
 					}
-				}
-				db, err := agent.Open(
-					logger,
-					prometheus.DefaultRegisterer,
-					remoteStorage,
-					localStoragePath,
-					&opts,
-				)
-				if err != nil {
-					return fmt.Errorf("opening storage failed: %w", err)
 				}
 
 				switch fsType := prom_runtime.Statfs(localStoragePath); fsType {
@@ -1340,8 +1372,6 @@ func main() {
 					"OutOfOrderTimeWindow", cfg.agent.OutOfOrderTimeWindow,
 				)
 
-				localStorage.Set(db, 0)
-				db.SetWriteNotified(remoteStorage)
 				close(dbOpen)
 				<-cancel
 				return nil

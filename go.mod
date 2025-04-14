@@ -31,6 +31,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gophercloud/gophercloud/v2 v2.6.0
 	github.com/grafana/regexp v0.0.0-20240518133315-a468a5bfb3bc
+	github.com/grafana/walqueue v0.0.0-20250411144828-c1b65559ee69
 	github.com/hashicorp/consul/api v1.31.2
 	github.com/hashicorp/nomad/api v0.0.0-20241218080744-e3ac00f30eec
 	github.com/hetznercloud/hcloud-go/v2 v2.20.1
@@ -94,9 +95,15 @@ require (
 )
 
 require (
+	github.com/deneonet/benc v1.1.7 // indirect
+	github.com/go-kit/log v0.2.1 // indirect
+	github.com/go-logfmt/logfmt v0.6.0 // indirect
 	github.com/hashicorp/go-version v1.7.0 // indirect
+	github.com/philhofer/fwd v1.1.3-0.20240916144458-20a13a1f6b7c // indirect
 	github.com/puzpuzpuz/xsync/v3 v3.5.1 // indirect
+	github.com/tinylib/msgp v1.2.4 // indirect
 	go.opentelemetry.io/collector/featuregate v1.28.0 // indirect
+	golang.design/x/chann v0.1.2 // indirect
 )
 
 require (
